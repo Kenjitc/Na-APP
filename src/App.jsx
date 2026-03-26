@@ -879,7 +879,7 @@ export default function App() {
     const days = [];
     // Espacios vacíos antes del primer día del mes
     for (let i = 0; i < firstDayIndex; i++) {
-      days.push(<div key={`empty-${i}`} className="min-h-[80px] md:min-h-[100px] border border-gray-100 bg-gray-50/30 rounded-lg"></div>);
+      days.push(<div key={`empty-${i}`} className="min-h-[50px] md:min-h-[100px] border border-gray-100 bg-gray-50/30 rounded-lg"></div>);
     }
     
     // Días del mes interactivos
@@ -896,34 +896,41 @@ export default function App() {
         <div 
           key={i} 
           onClick={() => setSelectedCalDate(dateString)}
-          className={`min-h-[80px] md:min-h-[100px] p-2 border rounded-lg flex flex-col transition-all cursor-pointer overflow-hidden ${
-            isSelected ? 'border-blue-500 ring-1 ring-blue-500 bg-blue-50/30' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+          className={`min-h-[50px] md:min-h-[100px] p-1 md:p-2 border rounded-lg flex flex-col transition-all cursor-pointer overflow-hidden ${
+            isSelected ? 'border-blue-500 ring-2 ring-blue-500 bg-blue-50/30' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
           }`}
         >
-          <div className="flex justify-between items-start mb-1">
-            <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700'}`}>
+          <div className="flex justify-center md:justify-between items-start mb-1">
+            <span className={`text-xs md:text-sm font-bold w-6 h-6 md:w-7 md:h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700'}`}>
               {i}
             </span>
             {dayEvents.length > 0 && (
-              <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-md hidden md:inline-block">
+              <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-md hidden lg:inline-block">
                 {dayEvents.length}
               </span>
             )}
           </div>
           
-          {/* Mostrar pequeños indicadores de eventos */}
-          <div className="flex flex-col gap-1 flex-1 overflow-hidden">
-            {dayEvents.slice(0, 2).map((e, idx) => (
-              <div key={idx} className={`text-[10px] md:text-xs truncate px-1.5 py-0.5 rounded border font-medium ${e.completed ? 'bg-green-50 text-green-700 border-green-100 line-through opacity-60' : 'bg-indigo-50 text-indigo-700 border-indigo-100'}`}>
-                {e.time && `${e.time} `}{e.title}
-              </div>
-            ))}
-            {dayEvents.length > 2 && (
-              <div className="text-[10px] text-gray-500 font-medium px-1">+{dayEvents.length - 2} más</div>
-            )}
-            {dayEvents.length > 0 && dayEvents.length <= 2 && (
-              <div className="flex gap-1 mt-auto md:hidden">
-                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block"></span>
+          {/* Indicadores de eventos adaptables */}
+          <div className="flex flex-col gap-1 flex-1 overflow-hidden justify-end md:justify-start">
+            {/* Texto en pantallas grandes */}
+            <div className="hidden md:flex flex-col gap-1">
+              {dayEvents.slice(0, 2).map((e, idx) => (
+                <div key={idx} className={`text-[10px] md:text-xs truncate px-1.5 py-0.5 rounded border font-medium ${e.completed ? 'bg-green-50 text-green-700 border-green-100 line-through opacity-60' : 'bg-indigo-50 text-indigo-700 border-indigo-100'}`}>
+                  {e.time && `${e.time} `}{e.title}
+                </div>
+              ))}
+              {dayEvents.length > 2 && (
+                <div className="text-[10px] text-gray-500 font-medium px-1">+{dayEvents.length - 2} más</div>
+              )}
+            </div>
+            
+            {/* Puntos en móviles para no aplastar el diseño */}
+            {dayEvents.length > 0 && (
+              <div className="flex md:hidden gap-0.5 justify-center flex-wrap pb-0.5">
+                {dayEvents.map((e, idx) => (
+                  <span key={idx} className={`w-1.5 h-1.5 rounded-full inline-block ${e.completed ? 'bg-green-500' : 'bg-blue-500'}`}></span>
+                ))}
               </div>
             )}
           </div>
@@ -934,27 +941,27 @@ export default function App() {
     const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
 
     return (
-      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 w-full flex flex-col h-full">
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-3 md:p-6 w-full flex flex-col md:h-full shrink-0">
         {/* Cabecera del Calendario */}
-        <div className="flex justify-between items-center mb-6">
-          <h3 className="text-xl md:text-2xl font-black text-gray-800 capitalize">
+        <div className="flex justify-between items-center mb-4 md:mb-6">
+          <h3 className="text-lg md:text-2xl font-black text-gray-800 capitalize">
             {monthNames[currentCalMonth]} {currentCalYear}
           </h3>
-          <div className="flex items-center gap-2">
-            <button onClick={() => changeMonth('prev')} className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronLeft size={20} /></button>
-            <button onClick={() => changeMonth('next')} className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronRight size={20} /></button>
+          <div className="flex items-center gap-1 md:gap-2">
+            <button onClick={() => changeMonth('prev')} className="p-1.5 md:p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronLeft size={18} /></button>
+            <button onClick={() => changeMonth('next')} className="p-1.5 md:p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronRight size={18} /></button>
           </div>
         </div>
 
         {/* Nombres de los días */}
-        <div className="grid grid-cols-7 gap-2 text-center mb-2">
+        <div className="grid grid-cols-7 gap-1 md:gap-2 text-center mb-2">
           {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map(d => (
-            <div key={d} className="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wider">{d}</div>
+            <div key={d} className="text-[10px] md:text-sm font-bold text-gray-400 uppercase tracking-wider">{d}</div>
           ))}
         </div>
 
         {/* Cuadrícula de días */}
-        <div className="grid grid-cols-7 gap-2 flex-1 auto-rows-fr">
+        <div className="grid grid-cols-7 gap-1 md:gap-2 flex-1 md:auto-rows-fr">
           {days}
         </div>
       </div>
@@ -965,20 +972,20 @@ export default function App() {
     // Filtrar los eventos que corresponden AL DÍA SELECCIONADO
     const selectedDayEvents = agendaEvents.filter(e => e.date === selectedCalDate);
     
-    // Formatear la fecha seleccionada para mostrarla bonita
+    // Formatear la fecha seleccionada
     const dateObj = new Date(`${selectedCalDate}T12:00:00`); // Evita problemas de zona horaria
     const formattedSelectedDate = dateObj.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
 
     return (
-      <div className="flex flex-col lg:flex-row gap-4 md:gap-6 h-full p-4 md:p-6 overflow-hidden">
+      <div className="flex flex-col lg:flex-row gap-4 md:gap-6 h-full p-4 md:p-6 overflow-y-auto lg:overflow-hidden pb-24 md:pb-6">
         
         {/* Columna Izquierda: Calendario Grande */}
-        <div className="w-full lg:w-2/3 flex flex-col shrink-0 overflow-y-auto">
+        <div className="w-full lg:w-2/3 flex flex-col shrink-0 lg:overflow-y-auto lg:h-full">
            {renderLargeCalendar()}
         </div>
 
         {/* Columna Derecha: Panel de Detalles del Día */}
-        <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto pr-1">
+        <div className="w-full lg:w-1/3 flex flex-col gap-4 lg:overflow-y-auto pr-1 shrink-0">
           
           {/* Detalles de eventos del día seleccionado */}
           <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex flex-col shrink-0 flex-1">

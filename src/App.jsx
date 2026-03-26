@@ -48,7 +48,6 @@ export default function App() {
   const [userRole, setUserRole] = useState(null); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [hourlyRate] = useState(15.00); 
-  const [searchQuery, setSearchQuery] = useState('');
   const [copiedCode, setCopiedCode] = useState(false);
   const [activeFamilyCode, setActiveFamilyCode] = useState('SMI-8X2P'); // Código por defecto
 
@@ -65,7 +64,8 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [activities, setActivities] = useState([]);
-  const [selectedPhoto, setSelectedPhoto] = useState(null); // Estado para visor de fotos
+  const [agendaEvents, setAgendaEvents] = useState([]); // Ahora inicia vacío, se llena con Supabase
+  const [selectedPhoto, setSelectedPhoto] = useState(null); 
   
   // Estados para la Agenda
   const getTodayString = () => {
@@ -73,10 +73,6 @@ export default function App() {
     return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
   };
 
-  const [agendaEvents, setAgendaEvents] = useState([
-    { id: 1, title: 'Cita con el pediatra', date: '2026-04-15', time: '10:00' },
-    { id: 2, title: 'Clase de natación', date: '2026-04-18', time: '16:00' }
-  ]);
   const [newEventTitle, setNewEventTitle] = useState('');
   const [newEventTime, setNewEventTime] = useState('');
   const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
@@ -96,7 +92,7 @@ export default function App() {
   const [shiftStart, setShiftStart] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
 
-  // MOCK DATA PARA EL SÚPER ADMIN (Usado para validar códigos)
+  // MOCK DATA PARA EL SÚPER ADMIN
   const [adminFamilies, setAdminFamilies] = useState([
     { id: 'FAM-001', name: 'Familia Smith', code: 'SMI-8X2P', status: 'active', plan: 'Premium ($9.99/mo)', joined: 'Hace 2 días' },
     { id: 'FAM-002', name: 'Familia Rodriguez', code: 'ROD-9A4C', status: 'active', plan: 'Básico ($4.99/mo)', joined: 'Hace 5 días' },
@@ -158,40 +154,25 @@ export default function App() {
   useEffect(() => {
     if (!isSupabaseReady || !supabase || !userRole || userRole === 'superadmin') return;
 
-    // A) Cargar datos iniciales desde Supabase
     const fetchData = async () => {
       try {
         // Cargar Mensajes
-        const { data: msgData, error: msgError } = await supabase
-          .from('messages')
-          .select('*')
-          .eq('family_code', activeFamilyCode)
-          .order('timestamp', { ascending: false })
-          .limit(50);
-        
-        if (msgError) console.error("Error cargando mensajes:", msgError);
+        const { data: msgData } = await supabase.from('messages').select('*').eq('family_code', activeFamilyCode).order('timestamp', { ascending: false }).limit(50);
         if (msgData) setMessages([...msgData].reverse());
 
         // Cargar Fotos
-        const { data: photoData } = await supabase
-          .from('photos')
-          .select('*')
-          .eq('family_code', activeFamilyCode)
-          .order('timestamp', { ascending: false })
-          .limit(50);
+        const { data: photoData } = await supabase.from('photos').select('*').eq('family_code', activeFamilyCode).order('timestamp', { ascending: false }).limit(50);
         if (photoData) setPhotos(photoData);
 
+        // Cargar Eventos de la Agenda
+        const { data: eventsData } = await supabase.from('events').select('*').eq('family_code', activeFamilyCode);
+        if (eventsData) setAgendaEvents(eventsData);
+
         // Cargar Actividades
-        const { data: actData } = await supabase
-          .from('activities')
-          .select('*')
-          .eq('family_code', activeFamilyCode)
-          .order('timestamp', { ascending: false })
-          .limit(50);
+        const { data: actData } = await supabase.from('activities').select('*').eq('family_code', activeFamilyCode).order('timestamp', { ascending: false }).limit(50);
         
         if (actData) {
           setActivities(actData);
-          // Analizar las actividades para saber si la niñera está en turno actualmente
           const latestShift = actData.find(a => a.type === 'shift_start' || a.type === 'shift_end');
           if (latestShift && latestShift.type === 'shift_start') {
             setIsClockedIn(true);
@@ -210,29 +191,34 @@ export default function App() {
 
     fetchData();
 
-    // B) Suscribirse a cambios en tiempo real
+    // Suscribirse a cambios en tiempo real
     const channel = supabase.channel(`family_room_${activeFamilyCode}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setMessages(current => [...current, payload.new]);
-        
-        // Notificar nuevo mensaje si fue enviado por la OTRA persona
-        if (payload.new.sender !== userRole) {
-          triggerNotification(`Nuevo mensaje de ${payload.new.sender === 'nanny' ? 'la niñera' : 'la familia'}`);
-        }
+        if (payload.new.sender !== userRole) triggerNotification(`Nuevo mensaje de ${payload.new.sender === 'nanny' ? 'la niñera' : 'la familia'}`);
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'photos', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setPhotos(current => [payload.new, ...current]);
-        
-        // Notificar nueva foto (si la subió la otra persona, o siempre para confirmación)
         triggerNotification(`📷 Nueva foto añadida a la galería`);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'photos' }, payload => {
         setPhotos(current => current.filter(p => p.id !== payload.old.id));
       })
+      .on('postgres_changes', { event: '*', schema: 'public', table: 'events', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
+        // Escuchar cambios en la agenda (INSERT, UPDATE, DELETE)
+        if (payload.eventType === 'INSERT') {
+          setAgendaEvents(current => [...current, payload.new]);
+        } else if (payload.eventType === 'DELETE') {
+          setAgendaEvents(current => current.filter(e => e.id !== payload.old.id));
+        } else if (payload.eventType === 'UPDATE') {
+          setAgendaEvents(current => current.map(e => e.id === payload.new.id ? payload.new : e));
+          if (payload.new.completed && userRole === 'parent') {
+            triggerNotification(`✅ Niñera completó: ${payload.new.title}`);
+          }
+        }
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setActivities(current => [payload.new, ...current]);
-        
-        // Manejar Sincronización y Notificaciones de Turnos/Actividades
         if (payload.new.type === 'shift_start') {
           setIsClockedIn(true);
           setShiftStart(new Date(payload.new.timestamp));
@@ -243,7 +229,6 @@ export default function App() {
           setShiftStart(null);
           triggerNotification(`🛑 La niñera ha finalizado su turno`);
         } else {
-          // Notificación para otras actividades (comida, siesta, etc.)
           triggerNotification(`📝 Actividad registrada: ${payload.new.title}`);
         }
       })
@@ -340,45 +325,30 @@ export default function App() {
       }]);
     } catch (error) {
       console.error("Error subiendo foto:", error);
-      alert(`Hubo un error subiendo la foto: ${error.message}\n\n⚠️ Si el error menciona "Row Level Security", debes ir a Supabase -> Storage -> Policies y crear una política que permita la acción "INSERT" para el bucket 'gallery'.`);
+      alert(`Hubo un error subiendo la foto: ${error.message}`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
     }
   };
 
-  // Función para que la Familia elimine fotos
   const deletePhoto = async (photo) => {
     if (!window.confirm("¿Estás seguro de que deseas eliminar esta foto de la galería?")) return;
     if (!isSupabaseReady || !supabase) return;
 
     try {
-      // 1. Extraer el nombre del archivo de la URL pública
       const urlParts = photo.url.split('/');
       const fileName = urlParts[urlParts.length - 1];
 
-      // 2. Eliminar del Storage
-      const { error: storageError } = await supabase.storage
-        .from('gallery')
-        .remove([`public/${fileName}`]);
+      await supabase.storage.from('gallery').remove([`public/${fileName}`]);
       
-      if (storageError) console.error("Error eliminando del storage:", storageError);
-
-      // 3. Eliminar de la base de datos
-      const { error: dbError } = await supabase
-        .from('photos')
-        .delete()
-        .eq('id', photo.id);
-
+      const { error: dbError } = await supabase.from('photos').delete().eq('id', photo.id);
       if (dbError) throw dbError;
 
       setToastMessage("Foto eliminada correctamente.");
       setTimeout(() => setToastMessage(null), 3000);
       
-      // Si la foto eliminada es la que está en pantalla completa, ciérrala
-      if (selectedPhoto && selectedPhoto.id === photo.id) {
-        setSelectedPhoto(null);
-      }
+      if (selectedPhoto && selectedPhoto.id === photo.id) setSelectedPhoto(null);
     } catch (error) {
       console.error("Error eliminando la foto:", error);
       alert(`No se pudo eliminar la foto: ${error.message}`);
@@ -391,7 +361,6 @@ export default function App() {
     const currentTimestamp = Date.now();
 
     if (isClockedIn) {
-      // Registrar Fin de Turno en Supabase
       const newAct = {
         type: 'shift_end',
         title: 'Fin de Turno',
@@ -402,7 +371,6 @@ export default function App() {
       };
       await supabase.from('activities').insert([newAct]);
     } else {
-      // Registrar Inicio de Turno en Supabase
       const newAct = {
         type: 'shift_start',
         title: 'Inicio de Turno',
@@ -415,27 +383,50 @@ export default function App() {
     }
   };
 
-  // --- Funciones de Agenda ---
-  const addAgendaEvent = (e) => {
+  // --- Funciones de Agenda conectadas a Supabase ---
+  const addAgendaEvent = async (e) => {
     e.preventDefault();
-    if (!newEventTitle) return;
+    if (!newEventTitle || !isSupabaseReady || !supabase) return;
     
     const newEvent = {
-      id: Date.now(),
       title: newEventTitle,
-      date: selectedCalDate, // Usa el día seleccionado en el calendario
-      time: newEventTime
+      date: selectedCalDate,
+      time: newEventTime,
+      completed: false,
+      timestamp: Date.now(),
+      family_code: activeFamilyCode
     };
     
-    setAgendaEvents([...agendaEvents, newEvent]);
-    setNewEventTitle('');
-    setNewEventTime('');
-    setToastMessage(`Evento guardado en la agenda para el ${selectedCalDate}.`);
-    setTimeout(() => setToastMessage(null), 3000);
+    const { error } = await supabase.from('events').insert([newEvent]);
+    
+    if (error) {
+      console.error("Error guardando evento:", error);
+      alert("Hubo un error al guardar el evento en la agenda.");
+    } else {
+      setNewEventTitle('');
+      setNewEventTime('');
+      setToastMessage(`Evento guardado en la agenda para el ${selectedCalDate}.`);
+      setTimeout(() => setToastMessage(null), 3000);
+    }
   };
 
-  const removeAgendaEvent = (id) => {
-    setAgendaEvents(agendaEvents.filter(event => event.id !== id));
+  const removeAgendaEvent = async (id) => {
+    if (!window.confirm("¿Eliminar este evento de la agenda?")) return;
+    if (!isSupabaseReady || !supabase) return;
+    
+    const { error } = await supabase.from('events').delete().eq('id', id);
+    if (error) console.error("Error eliminando evento:", error);
+  };
+
+  const markEventCompleted = async (id, title) => {
+    if (!isSupabaseReady || !supabase) return;
+    
+    const { error } = await supabase.from('events').update({ completed: true }).eq('id', id);
+    if (error) {
+      console.error("Error actualizando evento:", error);
+    } else {
+      triggerNotification(`✅ Has marcado como completada: ${title}`);
+    }
   };
 
   const changeMonth = (direction) => {
@@ -464,15 +455,12 @@ export default function App() {
     setUserRole('parent');
     setActiveFamilyCode('SMI-8X2P'); 
     setActiveTab('dashboard');
-    // Guardar sesión
     localStorage.setItem('nanny_app_session', JSON.stringify({ role: 'parent', code: 'SMI-8X2P' }));
   };
 
   const handleNannyJoin = (e) => {
     e.preventDefault();
     const cleanCode = familyCodeInput.trim().toUpperCase();
-    
-    // Obtener la lista de códigos válidos simulados en el sistema
     const validCodes = adminFamilies.map(f => f.code);
     
     if (cleanCode.length < 5) {
@@ -480,7 +468,6 @@ export default function App() {
       return;
     }
 
-    // VALIDACIÓN: Comprobar si el código existe en la plataforma
     if (!validCodes.includes(cleanCode)) {
       setLoginError('El código ingresado no existe o la familia no está registrada. Verifica con los padres.');
       return;
@@ -490,7 +477,6 @@ export default function App() {
     setUserRole('nanny');
     setActiveFamilyCode(cleanCode);
     setActiveTab('dashboard');
-    // Guardar sesión limpia
     localStorage.setItem('nanny_app_session', JSON.stringify({ role: 'nanny', code: cleanCode }));
   };
 
@@ -501,7 +487,6 @@ export default function App() {
     setFamilyCodeInput('');
     setLoginError('');
     setAdminPassword('');
-    // Borrar sesión y resetear estados
     localStorage.removeItem('nanny_app_session');
     setIsClockedIn(false);
     setShiftStart(null);
@@ -929,7 +914,7 @@ export default function App() {
           {/* Mostrar pequeños indicadores de eventos */}
           <div className="flex flex-col gap-1 flex-1 overflow-hidden">
             {dayEvents.slice(0, 2).map((e, idx) => (
-              <div key={idx} className="text-[10px] md:text-xs truncate bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-medium">
+              <div key={idx} className={`text-[10px] md:text-xs truncate px-1.5 py-0.5 rounded border font-medium ${e.completed ? 'bg-green-50 text-green-700 border-green-100 line-through opacity-60' : 'bg-indigo-50 text-indigo-700 border-indigo-100'}`}>
                 {e.time && `${e.time} `}{e.title}
               </div>
             ))}
@@ -996,13 +981,13 @@ export default function App() {
         <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto pr-1">
           
           {/* Detalles de eventos del día seleccionado */}
-          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 shrink-0">
-            <h3 className="font-bold text-gray-800 text-lg mb-1 capitalize border-b border-gray-100 pb-3 flex items-center gap-2">
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 flex flex-col shrink-0 flex-1">
+            <h3 className="font-bold text-gray-800 text-lg mb-1 capitalize border-b border-gray-100 pb-3 flex items-center gap-2 shrink-0">
               <CalendarIcon className="text-blue-600" size={20}/>
               {formattedSelectedDate}
             </h3>
             
-            <div className="mt-4 space-y-3 max-h-60 overflow-y-auto pr-1">
+            <div className="mt-4 space-y-3 overflow-y-auto pr-1 flex-1">
               {selectedDayEvents.length === 0 ? (
                 <div className="text-center py-6 text-gray-400">
                   <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-2"><Baby size={20}/></div>
@@ -1010,56 +995,72 @@ export default function App() {
                 </div>
               ) : (
                 selectedDayEvents.sort((a, b) => (a.time || '24:00').localeCompare(b.time || '24:00')).map(event => (
-                  <div key={event.id} className="flex items-start gap-3 p-3 border border-indigo-50 rounded-xl bg-indigo-50/30 group">
-                    <div className="w-10 h-10 rounded-full bg-white text-indigo-600 flex items-center justify-center shrink-0 shadow-sm border border-indigo-100">
-                      {event.time ? <Clock size={16} /> : <CalendarIcon size={16} />}
+                  <div key={event.id} className={`flex items-start gap-3 p-3 border rounded-xl group transition-all ${event.completed ? 'bg-green-50/30 border-green-100 opacity-75' : 'bg-indigo-50/30 border-indigo-50'}`}>
+                    <div className={`w-10 h-10 rounded-full flex items-center justify-center shrink-0 shadow-sm border transition-colors ${event.completed ? 'bg-green-100 text-green-600 border-green-200' : 'bg-white text-indigo-600 border-indigo-100'}`}>
+                      {event.completed ? <CheckCircle2 size={16} /> : (event.time ? <Clock size={16} /> : <CalendarIcon size={16} />)}
                     </div>
                     <div className="flex-1 min-w-0 pt-0.5">
-                      <h4 className="font-bold text-gray-900 text-sm truncate">{event.title}</h4>
-                      {event.time && <p className="text-xs text-indigo-600 font-bold mt-0.5">{event.time} hrs</p>}
+                      <h4 className={`font-bold text-sm truncate transition-all ${event.completed ? 'text-gray-500 line-through' : 'text-gray-900'}`}>{event.title}</h4>
+                      {event.time && <p className={`text-xs font-bold mt-0.5 transition-colors ${event.completed ? 'text-gray-400' : 'text-indigo-600'}`}>{event.time} hrs</p>}
                     </div>
-                    <button 
-                      onClick={() => removeAgendaEvent(event.id)} 
-                      className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-red-100 hover:text-red-600 transition opacity-0 group-hover:opacity-100"
-                      title="Eliminar evento"
-                    >
-                      <Trash2 size={14} />
-                    </button>
+                    
+                    {/* Controles: La familia elimina, la niñera completa */}
+                    {userRole === 'parent' ? (
+                      <button 
+                        onClick={() => removeAgendaEvent(event.id)} 
+                        className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-red-100 hover:text-red-600 transition opacity-0 group-hover:opacity-100"
+                        title="Eliminar evento"
+                      >
+                        <Trash2 size={14} />
+                      </button>
+                    ) : (
+                      !event.completed && (
+                        <button 
+                          onClick={() => markEventCompleted(event.id, event.title)} 
+                          className="w-8 h-8 rounded-full flex items-center justify-center text-green-500 hover:bg-green-100 hover:text-green-700 transition"
+                          title="Marcar como completado"
+                        >
+                          <CheckCircle2 size={18} />
+                        </button>
+                      )
+                    )}
                   </div>
                 ))
               )}
             </div>
           </div>
 
-          {/* Formulario para agregar evento al día seleccionado */}
-          <div className="bg-blue-50/50 rounded-2xl p-5 border border-blue-100 shrink-0">
-            <h3 className="font-bold text-blue-900 mb-4">Añadir al {selectedCalDate}</h3>
-            <form onSubmit={addAgendaEvent} className="space-y-4">
-              <div>
-                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título del evento</label>
-                <input 
-                  type="text" 
-                  value={newEventTitle} 
-                  onChange={e => setNewEventTitle(e.target.value)} 
-                  placeholder="Ej: Vacuna del bebé, Cumpleaños..." 
-                  className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
-                  required 
-                />
-              </div>
-              <div>
-                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora (Opcional)</label>
-                <input 
-                  type="time" 
-                  value={newEventTime} 
-                  onChange={e => setNewEventTime(e.target.value)} 
-                  className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
-                />
-              </div>
-              <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition text-sm flex justify-center items-center gap-2 shadow-sm">
-                <CalendarIcon size={16} /> Guardar evento
-              </button>
-            </form>
-          </div>
+          {/* Formulario para agregar evento (SOLO VISIBLE PARA FAMILIAS) */}
+          {userRole === 'parent' && (
+            <div className="bg-blue-50/50 rounded-2xl p-5 border border-blue-100 shrink-0">
+              <h3 className="font-bold text-blue-900 mb-4">Añadir al {selectedCalDate}</h3>
+              <form onSubmit={addAgendaEvent} className="space-y-4">
+                <div>
+                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título de la tarea o evento</label>
+                  <input 
+                    type="text" 
+                    value={newEventTitle} 
+                    onChange={e => setNewEventTitle(e.target.value)} 
+                    placeholder="Ej: Preparar biberón de 6oz..." 
+                    className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
+                    required 
+                  />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora (Opcional)</label>
+                  <input 
+                    type="time" 
+                    value={newEventTime} 
+                    onChange={e => setNewEventTime(e.target.value)} 
+                    className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
+                  />
+                </div>
+                <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition text-sm flex justify-center items-center gap-2 shadow-sm">
+                  <CalendarIcon size={16} /> Guardar tarea
+                </button>
+              </form>
+            </div>
+          )}
 
         </div>
       </div>

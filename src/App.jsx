@@ -1,4 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { 
   Baby, 
   Image as ImageIcon, 
@@ -26,7 +27,8 @@ import {
   CreditCard,
   Ban,
   Send,
-  Clock
+  Clock,
+  Trash2
 } from 'lucide-react';
 
 // ==========================================
@@ -61,6 +63,7 @@ export default function App() {
   const [messages, setMessages] = useState([]);
   const [photos, setPhotos] = useState([]);
   const [activities, setActivities] = useState([]);
+  const [selectedPhoto, setSelectedPhoto] = useState(null); // Estado para visor de fotos
   
   // Estados para la Agenda (Locales por ahora)
   const [agendaEvents, setAgendaEvents] = useState([
@@ -197,6 +200,10 @@ export default function App() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'photos', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setPhotos(current => [payload.new, ...current]);
       })
+      .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'photos' }, payload => {
+        // Escuchar cuando una foto es eliminada
+        setPhotos(current => current.filter(p => p.id !== payload.old.id));
+      })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setActivities(current => [payload.new, ...current]);
         
@@ -310,11 +317,48 @@ export default function App() {
       }]);
     } catch (error) {
       console.error("Error subiendo foto:", error);
-      // Mensaje de error mejorado para explicar el problema de RLS en Supabase
-      alert(`Hubo un error subiendo la foto: ${error.message}\n\n⚠️ Si el error menciona "Row Level Security" o "new row violates row-level security", debes ir a Supabase -> Storage -> Policies y crear una política que permita la acción "INSERT" para el bucket 'gallery'.`);
+      alert(`Hubo un error subiendo la foto: ${error.message}\n\n⚠️ Si el error menciona "Row Level Security", debes ir a Supabase -> Storage -> Policies y crear una política que permita la acción "INSERT" para el bucket 'gallery'.`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  // Función para que la Familia elimine fotos
+  const deletePhoto = async (photo) => {
+    if (!window.confirm("¿Estás seguro de que deseas eliminar esta foto de la galería?")) return;
+    if (!isSupabaseReady || !supabase) return;
+
+    try {
+      // 1. Extraer el nombre del archivo de la URL pública
+      const urlParts = photo.url.split('/');
+      const fileName = urlParts[urlParts.length - 1];
+
+      // 2. Eliminar del Storage
+      const { error: storageError } = await supabase.storage
+        .from('gallery')
+        .remove([`public/${fileName}`]);
+      
+      if (storageError) console.error("Error eliminando del storage:", storageError);
+
+      // 3. Eliminar de la base de datos
+      const { error: dbError } = await supabase
+        .from('photos')
+        .delete()
+        .eq('id', photo.id);
+
+      if (dbError) throw dbError;
+
+      setToastMessage("Foto eliminada correctamente.");
+      setTimeout(() => setToastMessage(null), 3000);
+      
+      // Si la foto eliminada es la que está en pantalla completa, ciérrala
+      if (selectedPhoto && selectedPhoto.id === photo.id) {
+        setSelectedPhoto(null);
+      }
+    } catch (error) {
+      console.error("Error eliminando la foto:", error);
+      alert(`No se pudo eliminar la foto: ${error.message}`);
     }
   };
 
@@ -718,16 +762,81 @@ export default function App() {
       <div className="grid grid-cols-2 md:grid-cols-3 lg:grid-cols-4 xl:grid-cols-5 gap-3 md:gap-4 overflow-y-auto flex-1 pr-1 md:pr-2 pb-4">
         {photos.length === 0 && <p className="col-span-full text-center text-gray-400 py-10">No hay fotos en la galería.</p>}
         {photos.map(photo => (
-          <div key={photo.id} className="rounded-xl overflow-hidden shadow-sm aspect-square relative group cursor-pointer border border-gray-200">
+          <div 
+            key={photo.id} 
+            className="rounded-xl overflow-hidden shadow-sm aspect-square relative group cursor-pointer border border-gray-200"
+            onClick={() => setSelectedPhoto(photo)}
+          >
             <img src={photo.url} alt="Momento capturado" className="object-cover w-full h-full group-hover:scale-105 transition duration-500" />
             <div className="absolute bottom-0 left-0 right-0 bg-gradient-to-t from-black/80 via-black/40 to-transparent p-4 opacity-90">
               <p className="text-white text-sm font-medium">{photo.time}</p>
             </div>
+
+            {/* Botón de eliminar (Solo para Familia) */}
+            {userRole === 'parent' && (
+              <button 
+                onClick={(e) => { e.stopPropagation(); deletePhoto(photo); }}
+                className="absolute top-2 right-2 p-2 bg-red-500/90 text-white rounded-lg opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-600 shadow-md backdrop-blur-sm"
+                title="Eliminar foto"
+              >
+                <Trash2 size={16} />
+              </button>
+            )}
           </div>
         ))}
       </div>
     </div>
   );
+
+  const renderMiniCalendar = () => {
+    const today = new Date();
+    const currentMonth = today.getMonth();
+    const currentYear = today.getFullYear();
+    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
+    const firstDayIndex = new Date(currentYear, currentMonth, 1).getDay();
+    
+    const days = [];
+    // Espacios vacíos antes del primer día del mes
+    for (let i = 0; i < firstDayIndex; i++) {
+      days.push(<div key={`empty-${i}`} className="w-8 h-8"></div>);
+    }
+    
+    // Días del mes
+    for (let i = 1; i <= daysInMonth; i++) {
+      // Formatear fecha para comparar con YYYY-MM-DD
+      const dateString = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+      const hasEvent = agendaEvents.some(e => e.date === dateString);
+      
+      days.push(
+        <div 
+          key={i} 
+          onClick={() => setNewEventDate(dateString)}
+          className={`w-8 h-8 flex items-center justify-center rounded-full text-sm relative transition-colors cursor-pointer ${
+            hasEvent ? 'bg-blue-100 text-blue-700 font-bold' : 'text-gray-600 hover:bg-gray-100'
+          } ${newEventDate === dateString ? 'ring-2 ring-blue-500 ring-offset-1' : ''}`}
+        >
+          {i}
+          {hasEvent && <span className="absolute bottom-1 w-1 h-1 bg-blue-600 rounded-full"></span>}
+        </div>
+      );
+    }
+
+    const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+    return (
+      <div className="bg-white border border-gray-200 rounded-2xl p-4 w-full h-full">
+        <h3 className="font-bold text-gray-800 text-center mb-4 capitalize">{monthNames[currentMonth]} {currentYear}</h3>
+        <div className="grid grid-cols-7 gap-1 text-center mb-2">
+          {['Do', 'Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa'].map(d => (
+            <div key={d} className="text-xs font-bold text-gray-400">{d}</div>
+          ))}
+        </div>
+        <div className="grid grid-cols-7 gap-1 place-items-center">
+          {days}
+        </div>
+      </div>
+    );
+  };
 
   const renderChat = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 h-full flex flex-col overflow-hidden m-4 md:m-6">
@@ -797,8 +906,9 @@ export default function App() {
       </div>
 
       <div className="flex flex-col lg:flex-row gap-6 flex-1 overflow-hidden">
-        {/* Formulario para agregar */}
-        <div className="w-full lg:w-1/3 shrink-0">
+        
+        {/* Columna Izquierda: Formulario */}
+        <div className="w-full lg:w-1/4 shrink-0">
           <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-100">
             <h3 className="font-bold text-blue-900 mb-4">Nuevo Evento</h3>
             <form onSubmit={addAgendaEvent} className="space-y-3">
@@ -806,39 +916,44 @@ export default function App() {
                 <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título</label>
                 <input type="text" value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} placeholder="Ej: Vacuna del bebé" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
               </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div>
-                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Fecha</label>
-                  <input type="date" value={newEventDate} onChange={e => setNewEventDate(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
-                </div>
-                <div>
-                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora</label>
-                  <input type="time" value={newEventTime} onChange={e => setNewEventTime(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" />
-                </div>
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Fecha</label>
+                <input type="date" value={newEventDate} onChange={e => setNewEventDate(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
+              </div>
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora</label>
+                <input type="time" value={newEventTime} onChange={e => setNewEventTime(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" />
               </div>
               <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition text-sm flex justify-center items-center gap-2">
-                <CalendarIcon size={16} /> Agregar a la agenda
+                <CalendarIcon size={16} /> Guardar evento
               </button>
             </form>
           </div>
         </div>
 
-        {/* Lista de eventos */}
-        <div className="flex-1 overflow-y-auto pr-2">
-          <h3 className="font-bold text-gray-800 text-base mb-4">Próximos Eventos</h3>
+        {/* Columna Central: Mini Calendario Visual */}
+        <div className="w-full lg:w-1/3 shrink-0 hidden sm:block">
+          {renderMiniCalendar()}
+        </div>
+
+        {/* Columna Derecha: Lista de eventos */}
+        <div className="flex-1 overflow-y-auto pr-2 bg-gray-50/50 rounded-2xl p-4 border border-gray-100">
+          <h3 className="font-bold text-gray-800 text-base mb-4 flex items-center gap-2">
+            <CalendarIcon size={18} className="text-blue-600" /> Próximos Eventos
+          </h3>
           {agendaEvents.length === 0 ? (
-            <p className="text-center text-gray-400 py-10">No hay eventos programados.</p>
+            <p className="text-center text-gray-400 py-10 text-sm">No hay eventos programados en la agenda.</p>
           ) : (
             <div className="space-y-3">
               {agendaEvents.sort((a, b) => new Date(a.date) - new Date(b.date)).map(event => (
-                <div key={event.id} className="flex items-start gap-4 p-4 border border-gray-100 rounded-xl hover:shadow-sm transition bg-white group">
-                  <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                <div key={event.id} className="flex items-start gap-4 p-4 border border-gray-100 rounded-xl hover:shadow-sm transition bg-white group shadow-sm">
+                  <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
                     <CalendarIcon size={20} />
                   </div>
                   <div className="flex-1 min-w-0">
                     <h4 className="font-bold text-gray-900 truncate">{event.title}</h4>
                     <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                      <span className="flex items-center gap-1"><CalendarIcon size={12} /> {event.date}</span>
+                      <span className="flex items-center gap-1 font-medium"><CalendarIcon size={12} /> {event.date}</span>
                       {event.time && <span className="flex items-center gap-1"><Clock size={12} /> {event.time}</span>}
                     </div>
                   </div>
@@ -1104,6 +1219,32 @@ export default function App() {
           {activeTab === 'profile' && renderFamilyProfile()}
           {activeTab === 'admin_dashboard' && renderSuperAdminDashboard()}
         </div>
+
+        {/* Modal de Visor de Fotos en Pantalla Completa */}
+        {selectedPhoto && (
+          <div 
+            className="fixed inset-0 z-[100] bg-black/90 flex items-center justify-center p-4 md:p-10 backdrop-blur-sm cursor-pointer" 
+            onClick={() => setSelectedPhoto(null)}
+          >
+            <button 
+              className="absolute top-4 right-4 md:top-8 md:right-8 text-gray-400 hover:text-white p-2 transition bg-black/50 rounded-full" 
+              onClick={() => setSelectedPhoto(null)}
+            >
+              <X size={32} />
+            </button>
+            <div className="relative max-w-full max-h-full flex items-center justify-center">
+              <img 
+                src={selectedPhoto.url} 
+                alt="Foto en pantalla completa" 
+                className="max-w-full max-h-[85vh] object-contain rounded-lg shadow-2xl" 
+                onClick={(e) => e.stopPropagation()} // Evita que se cierre al hacer clic en la foto
+              />
+              <div className="absolute -bottom-10 left-0 right-0 text-center">
+                <p className="font-medium text-white text-lg bg-black/50 inline-block px-4 py-1 rounded-full">{selectedPhoto.time}</p>
+              </div>
+            </div>
+          </div>
+        )}
 
         {userRole !== 'superadmin' && (
           <nav className="md:hidden bg-white border-t border-gray-200 flex justify-around items-center px-2 py-2 shrink-0 pb-[max(0.5rem,env(safe-area-inset-bottom))] z-50">

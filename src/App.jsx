@@ -29,12 +29,12 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 1. CONFIGURACIÓN DE SUPABASE (PRODUCCIÓN / VISTA PREVIA)
+// 1. CONFIGURACIÓN DE SUPABASE 
 // ==========================================
 const SUPABASE_URL = 'https://aikpnelyrqffgzflgnhh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_BaR6cEkpacl_9FzYB3piag_KMk55hAh';
 
-// Inicialización dinámica para compatibilidad con el entorno de vista previa
+// Inicialización dinámica de Supabase
 let supabase = null;
 
 export default function App() {
@@ -73,7 +73,6 @@ export default function App() {
   const [isClockedIn, setIsClockedIn] = useState(false);
   const [shiftStart, setShiftStart] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
-  const [shifts, setShifts] = useState([]);
 
   // MOCK DATA PARA EL SÚPER ADMIN
   const [adminFamilies, setAdminFamilies] = useState([
@@ -103,36 +102,79 @@ export default function App() {
   }, []);
 
   // ==========================================
-  // 2. EFECTOS PARA SUPABASE (TIEMPO REAL)
+  // RECUPERAR SESIÓN AL RECARGAR PÁGINA
+  // ==========================================
+  useEffect(() => {
+    const session = localStorage.getItem('nanny_app_session');
+    if (session) {
+      try {
+        const { role, code } = JSON.parse(session);
+        if (role && code) {
+          setUserRole(role);
+          setActiveFamilyCode(code);
+          setActiveTab('dashboard');
+        }
+      } catch (e) {
+        console.error("Error recuperando sesión", e);
+      }
+    }
+  }, []);
+
+  // ==========================================
+  // EFECTOS PARA SUPABASE (TIEMPO REAL Y CARGA)
   // ==========================================
   useEffect(() => {
     if (!isSupabaseReady || !supabase || !userRole || userRole === 'superadmin') return;
 
     // A) Cargar datos iniciales desde Supabase
     const fetchData = async () => {
-      // Cargar Mensajes
-      const { data: msgData } = await supabase
-        .from('messages')
-        .select('*')
-        .eq('family_code', activeFamilyCode)
-        .order('timestamp', { ascending: true });
-      if (msgData) setMessages(msgData);
+      try {
+        // Cargar Mensajes
+        const { data: msgData, error: msgError } = await supabase
+          .from('messages')
+          .select('*')
+          .eq('family_code', activeFamilyCode)
+          .order('timestamp', { ascending: false })
+          .limit(50);
+        
+        if (msgError) console.error("Error cargando mensajes:", msgError);
+        // SOLUCIÓN: Usamos [...msgData] para hacer una copia segura antes de voltearlos y evitar que la app colapse al recargar
+        if (msgData) setMessages([...msgData].reverse());
 
-      // Cargar Fotos
-      const { data: photoData } = await supabase
-        .from('photos')
-        .select('*')
-        .eq('family_code', activeFamilyCode)
-        .order('timestamp', { ascending: false });
-      if (photoData) setPhotos(photoData);
+        // Cargar Fotos
+        const { data: photoData } = await supabase
+          .from('photos')
+          .select('*')
+          .eq('family_code', activeFamilyCode)
+          .order('timestamp', { ascending: false })
+          .limit(50);
+        if (photoData) setPhotos(photoData);
 
-      // Cargar Actividades
-      const { data: actData } = await supabase
-        .from('activities')
-        .select('*')
-        .eq('family_code', activeFamilyCode)
-        .order('timestamp', { ascending: false });
-      if (actData) setActivities(actData);
+        // Cargar Actividades
+        const { data: actData } = await supabase
+          .from('activities')
+          .select('*')
+          .eq('family_code', activeFamilyCode)
+          .order('timestamp', { ascending: false })
+          .limit(50);
+        
+        if (actData) {
+          setActivities(actData);
+          // Analizar las actividades para saber si la niñera está en turno actualmente
+          const latestShift = actData.find(a => a.type === 'shift_start' || a.type === 'shift_end');
+          if (latestShift && latestShift.type === 'shift_start') {
+            setIsClockedIn(true);
+            setShiftStart(new Date(latestShift.timestamp));
+            setElapsedTime(Math.floor((Date.now() - latestShift.timestamp) / 1000));
+          } else {
+            setIsClockedIn(false);
+            setShiftStart(null);
+            setElapsedTime(0);
+          }
+        }
+      } catch (err) {
+        console.error("Error general de carga:", err);
+      }
     };
 
     fetchData();
@@ -148,9 +190,19 @@ export default function App() {
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setActivities(current => [payload.new, ...current]);
         
-        // Disparar notificación push visual si alguien más subió la actividad
+        // Disparar notificación push visual
         const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
         setNotifications(prev => [{ id: Date.now(), text: `Nueva actividad: ${payload.new.title}`, time: timeNow, unread: true }, ...prev]);
+        
+        // Sincronizar el turno en tiempo real
+        if (payload.new.type === 'shift_start') {
+          setIsClockedIn(true);
+          setShiftStart(new Date(payload.new.timestamp));
+          setElapsedTime(0);
+        } else if (payload.new.type === 'shift_end') {
+          setIsClockedIn(false);
+          setShiftStart(null);
+        }
       })
       .subscribe();
 
@@ -162,20 +214,22 @@ export default function App() {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
   }, [messages]);
 
-  // Cronómetro de turno
+  // Cronómetro sincronizado
   useEffect(() => {
     let interval;
-    if (isClockedIn && userRole === 'nanny') {
-      interval = setInterval(() => setElapsedTime(prev => prev + 1), 1000);
+    if (isClockedIn && shiftStart) {
+      interval = setInterval(() => {
+        setElapsedTime(Math.floor((Date.now() - shiftStart.getTime()) / 1000));
+      }, 1000);
     } else {
       clearInterval(interval);
     }
     return () => clearInterval(interval);
-  }, [isClockedIn, userRole]);
+  }, [isClockedIn, shiftStart]);
 
 
   // ==========================================
-  // 3. FUNCIONES QUE GUARDAN EN BASE DE DATOS
+  // FUNCIONES QUE GUARDAN EN BASE DE DATOS
   // ==========================================
 
   const sendMessage = async (e) => {
@@ -191,8 +245,6 @@ export default function App() {
     };
     
     setNewMessage(''); 
-    
-    // Guardar en BD
     const { error } = await supabase.from('messages').insert([msg]);
     if (error) console.error("Error enviando mensaje:", error);
   };
@@ -211,7 +263,6 @@ export default function App() {
       family_code: activeFamilyCode 
     };
 
-    // Guardar en BD
     const { error } = await supabase.from('activities').insert([newAct]);
     
     if (error) {
@@ -229,7 +280,6 @@ export default function App() {
 
     setIsUploading(true);
     try {
-      // 1. Subir foto al servidor (Storage: bucket 'gallery')
       const fileExt = file.name.split('.').pop();
       const fileName = `${Date.now()}.${fileExt}`;
       const { error: uploadError } = await supabase.storage
@@ -238,12 +288,10 @@ export default function App() {
 
       if (uploadError) throw uploadError;
 
-      // 2. Obtener URL Pública de la foto
       const { data: { publicUrl } } = supabase.storage
         .from('gallery')
         .getPublicUrl(`public/${fileName}`);
 
-      // 3. Guardar el registro en la base de datos
       await supabase.from('photos').insert([{
         url: publicUrl,
         time: new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' }),
@@ -255,8 +303,37 @@ export default function App() {
       alert("Hubo un error subiendo la foto. Verifica que el bucket 'gallery' exista y sea público.");
     } finally {
       setIsUploading(false);
-      // Resetear input para poder subir la misma foto de nuevo si se desea
       if (fileInputRef.current) fileInputRef.current.value = '';
+    }
+  };
+
+  const handleClockInOut = async () => {
+    if (!isSupabaseReady || !supabase) return;
+    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    const currentTimestamp = Date.now();
+
+    if (isClockedIn) {
+      // Registrar Fin de Turno en Supabase
+      const newAct = {
+        type: 'shift_end',
+        title: 'Fin de Turno',
+        time: timeNow,
+        notes: `Turno finalizado. Duración: ${formatTime(elapsedTime)} hrs.`,
+        timestamp: currentTimestamp,
+        family_code: activeFamilyCode
+      };
+      await supabase.from('activities').insert([newAct]);
+    } else {
+      // Registrar Inicio de Turno en Supabase
+      const newAct = {
+        type: 'shift_start',
+        title: 'Inicio de Turno',
+        time: timeNow,
+        notes: 'La niñera ha comenzado su turno.',
+        timestamp: currentTimestamp,
+        family_code: activeFamilyCode
+      };
+      await supabase.from('activities').insert([newAct]);
     }
   };
 
@@ -268,6 +345,40 @@ export default function App() {
     setUserRole('parent');
     setActiveFamilyCode('SMI-8X2P'); 
     setActiveTab('dashboard');
+    // Guardar sesión
+    localStorage.setItem('nanny_app_session', JSON.stringify({ role: 'parent', code: 'SMI-8X2P' }));
+  };
+
+  const handleNannyJoin = (e) => {
+    e.preventDefault();
+    // SOLUCIÓN: Limpiar espacios en blanco (.trim()) y asegurar mayúsculas
+    const cleanCode = familyCodeInput.trim().toUpperCase();
+    
+    if (cleanCode.length < 5) {
+      setLoginError('Por favor ingresa un código válido (ej. SMI-8X2P)');
+      return;
+    }
+    
+    setLoginError('');
+    setUserRole('nanny');
+    setActiveFamilyCode(cleanCode);
+    setActiveTab('dashboard');
+    // Guardar sesión limpia
+    localStorage.setItem('nanny_app_session', JSON.stringify({ role: 'nanny', code: cleanCode }));
+  };
+
+  const handleLogout = () => {
+    setUserRole(null);
+    setShowNannyJoin(false);
+    setShowAdminLogin(false);
+    setFamilyCodeInput('');
+    setLoginError('');
+    setAdminPassword('');
+    // Borrar sesión y resetear estados
+    localStorage.removeItem('nanny_app_session');
+    setIsClockedIn(false);
+    setShiftStart(null);
+    setElapsedTime(0);
   };
 
   const handleSuperAdminAuth = (e) => {
@@ -283,48 +394,14 @@ export default function App() {
     }
   };
 
-  const handleNannyJoin = (e) => {
-    e.preventDefault();
-    if (familyCodeInput.trim().length < 5) {
-      setLoginError('Por favor ingresa un código válido (ej. SMI-8X2P)');
-      return;
-    }
-    setLoginError('');
-    setUserRole('nanny');
-    setActiveFamilyCode(familyCodeInput.toUpperCase());
-    setActiveTab('dashboard');
-  };
-
-  const handleLogout = () => {
-    setUserRole(null);
-    setShowNannyJoin(false);
-    setShowAdminLogin(false);
-    setFamilyCodeInput('');
-    setLoginError('');
-    setAdminPassword('');
-  };
-
   const toggleFamilyStatus = (id) => {
     setAdminFamilies(adminFamilies.map(fam => 
       fam.id === id ? { ...fam, status: fam.status === 'active' ? 'suspended' : 'active' } : fam
     ));
   };
 
-  const handleClockInOut = () => {
-    if (isClockedIn) {
-      setIsClockedIn(false);
-      const hoursWorked = elapsedTime / 3600;
-      const earned = hoursWorked * hourlyRate;
-      setShifts([{ id: Date.now(), date: 'Hoy', duration: hoursWorked, earned: earned }, ...shifts]);
-      setElapsedTime(0);
-      setShiftStart(null);
-    } else {
-      setIsClockedIn(true);
-      setShiftStart(new Date());
-    }
-  };
-
   const formatTime = (totalSeconds) => {
+    if (totalSeconds < 0) totalSeconds = 0;
     const hours = Math.floor(totalSeconds / 3600);
     const minutes = Math.floor((totalSeconds % 3600) / 60);
     const seconds = totalSeconds % 60;
@@ -337,6 +414,8 @@ export default function App() {
       case 'diaper': return <Droplets className="text-blue-500" />;
       case 'sleep': return <Moon className="text-indigo-500" />;
       case 'meds': return <Pill className="text-red-500" />;
+      case 'shift_start': return <Play className="text-green-500" />;
+      case 'shift_end': return <Square className="text-red-500" />;
       default: return <Baby className="text-gray-500" />;
     }
   };

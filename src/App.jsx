@@ -1,5 +1,4 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { createClient } from '@supabase/supabase-js';
 import { 
   Baby, 
   Image as ImageIcon, 
@@ -30,16 +29,17 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 1. CONFIGURACIÓN DE SUPABASE (PRODUCCIÓN)
+// 1. CONFIGURACIÓN DE SUPABASE (PRODUCCIÓN / VISTA PREVIA)
 // ==========================================
 const SUPABASE_URL = 'https://aikpnelyrqffgzflgnhh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_BaR6cEkpacl_9FzYB3piag_KMk55hAh';
 
-// Inicialización profesional para Vercel/Vite
-const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+// Inicialización dinámica para compatibilidad con el entorno de vista previa
+let supabase = null;
 
 export default function App() {
   // --- ESTADOS GLOBALES ---
+  const [isSupabaseReady, setIsSupabaseReady] = useState(false);
   const [userRole, setUserRole] = useState(null); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [hourlyRate] = useState(15.00); 
@@ -83,10 +83,30 @@ export default function App() {
   const [adminMetrics] = useState({ totalFamilies: 142, activeNannies: 138, mrr: 1418.50 });
 
   // ==========================================
+  // INICIALIZACIÓN DINÁMICA DE SUPABASE
+  // ==========================================
+  useEffect(() => {
+    if (window.supabase) {
+      if (!supabase) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      setIsSupabaseReady(true);
+      return;
+    }
+    
+    const script = document.createElement('script');
+    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
+    script.async = true;
+    script.onload = () => {
+      if (!supabase) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
+      setIsSupabaseReady(true);
+    };
+    document.head.appendChild(script);
+  }, []);
+
+  // ==========================================
   // 2. EFECTOS PARA SUPABASE (TIEMPO REAL)
   // ==========================================
   useEffect(() => {
-    if (!userRole || userRole === 'superadmin') return;
+    if (!isSupabaseReady || !supabase || !userRole || userRole === 'superadmin') return;
 
     // A) Cargar datos iniciales desde Supabase
     const fetchData = async () => {
@@ -135,7 +155,7 @@ export default function App() {
       .subscribe();
 
     return () => { supabase.removeChannel(channel); };
-  }, [userRole, activeFamilyCode]);
+  }, [userRole, activeFamilyCode, isSupabaseReady]);
 
   // Autoscroll del chat
   useEffect(() => {
@@ -160,7 +180,7 @@ export default function App() {
 
   const sendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim()) return;
+    if (!newMessage.trim() || !isSupabaseReady || !supabase) return;
     
     const msg = {
       sender: userRole, 
@@ -178,6 +198,7 @@ export default function App() {
   };
 
   const addActivity = async (type, title) => {
+    if (!isSupabaseReady || !supabase) return;
     const notes = window.prompt(`Añadir notas para ${title}:`, "") || "Sin notas adicionales";
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -204,7 +225,7 @@ export default function App() {
 
   const handlePhotoUpload = async (e) => {
     const file = e.target.files[0];
-    if (!file) return;
+    if (!file || !isSupabaseReady || !supabase) return;
 
     setIsUploading(true);
     try {

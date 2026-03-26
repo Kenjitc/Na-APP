@@ -25,7 +25,8 @@ import {
   TrendingUp,
   CreditCard,
   Ban,
-  Send
+  Send,
+  Clock
 } from 'lucide-react';
 
 // ==========================================
@@ -61,6 +62,15 @@ export default function App() {
   const [photos, setPhotos] = useState([]);
   const [activities, setActivities] = useState([]);
   
+  // Estados para la Agenda (Locales por ahora)
+  const [agendaEvents, setAgendaEvents] = useState([
+    { id: 1, title: 'Cita con el pediatra', date: '2026-04-15', time: '10:00' },
+    { id: 2, title: 'Clase de natación', date: '2026-04-18', time: '16:00' }
+  ]);
+  const [newEventTitle, setNewEventTitle] = useState('');
+  const [newEventDate, setNewEventDate] = useState('');
+  const [newEventTime, setNewEventTime] = useState('');
+
   // Estados Locales de la UI
   const [notifications, setNotifications] = useState([]);
   const [showNotifications, setShowNotifications] = useState(false);
@@ -74,7 +84,7 @@ export default function App() {
   const [shiftStart, setShiftStart] = useState(null);
   const [elapsedTime, setElapsedTime] = useState(0);
 
-  // MOCK DATA PARA EL SÚPER ADMIN
+  // MOCK DATA PARA EL SÚPER ADMIN (Usado para validar códigos)
   const [adminFamilies, setAdminFamilies] = useState([
     { id: 'FAM-001', name: 'Familia Smith', code: 'SMI-8X2P', status: 'active', plan: 'Premium ($9.99/mo)', joined: 'Hace 2 días' },
     { id: 'FAM-002', name: 'Familia Rodriguez', code: 'ROD-9A4C', status: 'active', plan: 'Básico ($4.99/mo)', joined: 'Hace 5 días' },
@@ -300,7 +310,8 @@ export default function App() {
       }]);
     } catch (error) {
       console.error("Error subiendo foto:", error);
-      alert("Hubo un error subiendo la foto. Verifica que el bucket 'gallery' exista y sea público.");
+      // Mensaje de error mejorado para explicar el problema de RLS en Supabase
+      alert(`Hubo un error subiendo la foto: ${error.message}\n\n⚠️ Si el error menciona "Row Level Security" o "new row violates row-level security", debes ir a Supabase -> Storage -> Policies y crear una política que permita la acción "INSERT" para el bucket 'gallery'.`);
     } finally {
       setIsUploading(false);
       if (fileInputRef.current) fileInputRef.current.value = '';
@@ -337,6 +348,29 @@ export default function App() {
     }
   };
 
+  const addAgendaEvent = (e) => {
+    e.preventDefault();
+    if (!newEventTitle || !newEventDate) return;
+    
+    const newEvent = {
+      id: Date.now(),
+      title: newEventTitle,
+      date: newEventDate,
+      time: newEventTime
+    };
+    
+    setAgendaEvents([...agendaEvents, newEvent]);
+    setNewEventTitle('');
+    setNewEventDate('');
+    setNewEventTime('');
+    setToastMessage(`Evento guardado en la agenda.`);
+    setTimeout(() => setToastMessage(null), 3000);
+  };
+
+  const removeAgendaEvent = (id) => {
+    setAgendaEvents(agendaEvents.filter(event => event.id !== id));
+  };
+
   // ==========================================
   // FUNCIONES DE LOGIN Y NAVEGACIÓN
   // ==========================================
@@ -351,11 +385,19 @@ export default function App() {
 
   const handleNannyJoin = (e) => {
     e.preventDefault();
-    // SOLUCIÓN: Limpiar espacios en blanco (.trim()) y asegurar mayúsculas
     const cleanCode = familyCodeInput.trim().toUpperCase();
+    
+    // Obtener la lista de códigos válidos simulados en el sistema
+    const validCodes = adminFamilies.map(f => f.code);
     
     if (cleanCode.length < 5) {
       setLoginError('Por favor ingresa un código válido (ej. SMI-8X2P)');
+      return;
+    }
+
+    // VALIDACIÓN: Comprobar si el código existe en la plataforma
+    if (!validCodes.includes(cleanCode)) {
+      setLoginError('El código ingresado no existe o la familia no está registrada. Verifica con los padres.');
       return;
     }
     
@@ -746,15 +788,68 @@ export default function App() {
   );
 
   const renderCalendar = () => (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 h-full flex flex-col relative m-4 md:m-6">
-      <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4 gap-4">
+    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 h-full flex flex-col m-4 md:m-6 overflow-hidden">
+      <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4 gap-4 shrink-0">
         <div>
           <h2 className="text-lg md:text-xl font-bold text-gray-800">Agenda Semanal</h2>
+          <p className="text-xs md:text-sm text-gray-500">Planifica eventos y recordatorios importantes.</p>
         </div>
       </div>
-      <div className="flex-1 overflow-y-auto pr-1 md:pr-2">
-        <h3 className="font-bold text-gray-800 text-base md:text-lg mb-4">Eventos programados</h3>
-        <p className="text-gray-500">Módulo en construcción.</p>
+
+      <div className="flex flex-col lg:flex-row gap-6 flex-1 overflow-hidden">
+        {/* Formulario para agregar */}
+        <div className="w-full lg:w-1/3 shrink-0">
+          <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-100">
+            <h3 className="font-bold text-blue-900 mb-4">Nuevo Evento</h3>
+            <form onSubmit={addAgendaEvent} className="space-y-3">
+              <div>
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título</label>
+                <input type="text" value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} placeholder="Ej: Vacuna del bebé" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
+              </div>
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Fecha</label>
+                  <input type="date" value={newEventDate} onChange={e => setNewEventDate(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
+                </div>
+                <div>
+                  <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora</label>
+                  <input type="time" value={newEventTime} onChange={e => setNewEventTime(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" />
+                </div>
+              </div>
+              <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition text-sm flex justify-center items-center gap-2">
+                <CalendarIcon size={16} /> Agregar a la agenda
+              </button>
+            </form>
+          </div>
+        </div>
+
+        {/* Lista de eventos */}
+        <div className="flex-1 overflow-y-auto pr-2">
+          <h3 className="font-bold text-gray-800 text-base mb-4">Próximos Eventos</h3>
+          {agendaEvents.length === 0 ? (
+            <p className="text-center text-gray-400 py-10">No hay eventos programados.</p>
+          ) : (
+            <div className="space-y-3">
+              {agendaEvents.sort((a, b) => new Date(a.date) - new Date(b.date)).map(event => (
+                <div key={event.id} className="flex items-start gap-4 p-4 border border-gray-100 rounded-xl hover:shadow-sm transition bg-white group">
+                  <div className="w-12 h-12 rounded-full bg-blue-100 text-blue-600 flex items-center justify-center shrink-0">
+                    <CalendarIcon size={20} />
+                  </div>
+                  <div className="flex-1 min-w-0">
+                    <h4 className="font-bold text-gray-900 truncate">{event.title}</h4>
+                    <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
+                      <span className="flex items-center gap-1"><CalendarIcon size={12} /> {event.date}</span>
+                      {event.time && <span className="flex items-center gap-1"><Clock size={12} /> {event.time}</span>}
+                    </div>
+                  </div>
+                  <button onClick={() => removeAgendaEvent(event.id)} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-red-50 hover:text-red-500 transition opacity-0 group-hover:opacity-100">
+                    <X size={16} />
+                  </button>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
       </div>
     </div>
   );

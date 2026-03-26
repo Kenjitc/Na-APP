@@ -1,7 +1,7 @@
 import React, { useState, useEffect, useRef } from 'react';
+import { createClient } from '@supabase/supabase-js';
 import { 
   Baby, 
-  Clock, 
   Image as ImageIcon, 
   MessageCircle, 
   Calendar as CalendarIcon,
@@ -30,17 +30,16 @@ import {
 } from 'lucide-react';
 
 // ==========================================
-// 1. CONFIGURACIÓN DE SUPABASE
+// 1. CONFIGURACIÓN DE SUPABASE (PRODUCCIÓN)
 // ==========================================
 const SUPABASE_URL = 'https://aikpnelyrqffgzflgnhh.supabase.co';
 const SUPABASE_ANON_KEY = 'sb_publishable_BaR6cEkpacl_9FzYB3piag_KMk55hAh';
 
-// Variable global para almacenar la instancia
-let supabase = null;
+// Inicialización profesional para Vercel/Vite
+const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
 
 export default function App() {
   // --- ESTADOS GLOBALES ---
-  const [isSupabaseReady, setIsSupabaseReady] = useState(false);
   const [userRole, setUserRole] = useState(null); 
   const [activeTab, setActiveTab] = useState('dashboard');
   const [hourlyRate] = useState(15.00); 
@@ -84,35 +83,15 @@ export default function App() {
   const [adminMetrics] = useState({ totalFamilies: 142, activeNannies: 138, mrr: 1418.50 });
 
   // ==========================================
-  // INICIALIZACIÓN DINÁMICA DE SUPABASE (Para Entorno Web)
-  // ==========================================
-  useEffect(() => {
-    if (window.supabase) {
-      if (!supabase) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      setIsSupabaseReady(true);
-      return;
-    }
-    
-    const script = document.createElement('script');
-    script.src = 'https://cdn.jsdelivr.net/npm/@supabase/supabase-js@2';
-    script.async = true;
-    script.onload = () => {
-      if (!supabase) supabase = window.supabase.createClient(SUPABASE_URL, SUPABASE_ANON_KEY);
-      setIsSupabaseReady(true);
-    };
-    document.head.appendChild(script);
-  }, []);
-
-  // ==========================================
   // 2. EFECTOS PARA SUPABASE (TIEMPO REAL)
   // ==========================================
   useEffect(() => {
-    if (!isSupabaseReady || !supabase || !userRole || userRole === 'superadmin') return;
+    if (!userRole || userRole === 'superadmin') return;
 
     // A) Cargar datos iniciales desde Supabase
     const fetchData = async () => {
       // Cargar Mensajes
-      const { data: msgData, error: msgError } = await supabase
+      const { data: msgData } = await supabase
         .from('messages')
         .select('*')
         .eq('family_code', activeFamilyCode)
@@ -120,7 +99,7 @@ export default function App() {
       if (msgData) setMessages(msgData);
 
       // Cargar Fotos
-      const { data: photoData, error: photoError } = await supabase
+      const { data: photoData } = await supabase
         .from('photos')
         .select('*')
         .eq('family_code', activeFamilyCode)
@@ -128,7 +107,7 @@ export default function App() {
       if (photoData) setPhotos(photoData);
 
       // Cargar Actividades
-      const { data: actData, error: actError } = await supabase
+      const { data: actData } = await supabase
         .from('activities')
         .select('*')
         .eq('family_code', activeFamilyCode)
@@ -181,7 +160,7 @@ export default function App() {
 
   const sendMessage = async (e) => {
     e.preventDefault();
-    if (!newMessage.trim() || !isSupabaseReady || !supabase) return;
+    if (!newMessage.trim()) return;
     
     const msg = {
       sender: userRole, 
@@ -199,7 +178,6 @@ export default function App() {
   };
 
   const addActivity = async (type, title) => {
-    if (!isSupabaseReady || !supabase) return;
     const notes = window.prompt(`Añadir notas para ${title}:`, "") || "Sin notas adicionales";
     const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 
@@ -226,7 +204,7 @@ export default function App() {
 
   const handlePhotoUpload = async (e) => {
     const file = e.target.files[0];
-    if (!file || !isSupabaseReady || !supabase) return;
+    if (!file) return;
 
     setIsUploading(true);
     try {

@@ -28,7 +28,9 @@ import {
   Ban,
   Send,
   Clock,
-  Trash2
+  Trash2,
+  ChevronLeft,
+  ChevronRight
 } from 'lucide-react';
 
 // ==========================================
@@ -65,14 +67,21 @@ export default function App() {
   const [activities, setActivities] = useState([]);
   const [selectedPhoto, setSelectedPhoto] = useState(null); // Estado para visor de fotos
   
-  // Estados para la Agenda (Locales por ahora)
+  // Estados para la Agenda
+  const getTodayString = () => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
+  };
+
   const [agendaEvents, setAgendaEvents] = useState([
     { id: 1, title: 'Cita con el pediatra', date: '2026-04-15', time: '10:00' },
     { id: 2, title: 'Clase de natación', date: '2026-04-18', time: '16:00' }
   ]);
   const [newEventTitle, setNewEventTitle] = useState('');
-  const [newEventDate, setNewEventDate] = useState('');
   const [newEventTime, setNewEventTime] = useState('');
+  const [currentCalMonth, setCurrentCalMonth] = useState(new Date().getMonth());
+  const [currentCalYear, setCurrentCalYear] = useState(new Date().getFullYear());
+  const [selectedCalDate, setSelectedCalDate] = useState(getTodayString());
 
   // Estados Locales de la UI
   const [notifications, setNotifications] = useState([]);
@@ -133,6 +142,16 @@ export default function App() {
     }
   }, []);
 
+  // Función Helper para crear notificaciones
+  const triggerNotification = (text, pushToast = true) => {
+    const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+    setNotifications(prev => [{ id: Date.now() + Math.random(), text, time: timeNow, unread: true }, ...prev]);
+    if (pushToast) {
+      setToastMessage(text);
+      setTimeout(() => setToastMessage(null), 4000);
+    }
+  };
+
   // ==========================================
   // EFECTOS PARA SUPABASE (TIEMPO REAL Y CARGA)
   // ==========================================
@@ -151,7 +170,6 @@ export default function App() {
           .limit(50);
         
         if (msgError) console.error("Error cargando mensajes:", msgError);
-        // SOLUCIÓN: Usamos [...msgData] para hacer una copia segura antes de voltearlos y evitar que la app colapse al recargar
         if (msgData) setMessages([...msgData].reverse());
 
         // Cargar Fotos
@@ -196,29 +214,37 @@ export default function App() {
     const channel = supabase.channel(`family_room_${activeFamilyCode}`)
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'messages', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setMessages(current => [...current, payload.new]);
+        
+        // Notificar nuevo mensaje si fue enviado por la OTRA persona
+        if (payload.new.sender !== userRole) {
+          triggerNotification(`Nuevo mensaje de ${payload.new.sender === 'nanny' ? 'la niñera' : 'la familia'}`);
+        }
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'photos', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setPhotos(current => [payload.new, ...current]);
+        
+        // Notificar nueva foto (si la subió la otra persona, o siempre para confirmación)
+        triggerNotification(`📷 Nueva foto añadida a la galería`);
       })
       .on('postgres_changes', { event: 'DELETE', schema: 'public', table: 'photos' }, payload => {
-        // Escuchar cuando una foto es eliminada
         setPhotos(current => current.filter(p => p.id !== payload.old.id));
       })
       .on('postgres_changes', { event: 'INSERT', schema: 'public', table: 'activities', filter: `family_code=eq.${activeFamilyCode}` }, payload => {
         setActivities(current => [payload.new, ...current]);
         
-        // Disparar notificación push visual
-        const timeNow = new Date().toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-        setNotifications(prev => [{ id: Date.now(), text: `Nueva actividad: ${payload.new.title}`, time: timeNow, unread: true }, ...prev]);
-        
-        // Sincronizar el turno en tiempo real
+        // Manejar Sincronización y Notificaciones de Turnos/Actividades
         if (payload.new.type === 'shift_start') {
           setIsClockedIn(true);
           setShiftStart(new Date(payload.new.timestamp));
           setElapsedTime(0);
+          triggerNotification(`✅ La niñera ha iniciado su turno`);
         } else if (payload.new.type === 'shift_end') {
           setIsClockedIn(false);
           setShiftStart(null);
+          triggerNotification(`🛑 La niñera ha finalizado su turno`);
+        } else {
+          // Notificación para otras actividades (comida, siesta, etc.)
+          triggerNotification(`📝 Actividad registrada: ${payload.new.title}`);
         }
       })
       .subscribe();
@@ -285,9 +311,6 @@ export default function App() {
     if (error) {
       console.error("Error guardando actividad:", error);
       alert("Hubo un error al guardar la actividad");
-    } else {
-      setToastMessage(`Registrado: "${title}". Se notificó al instante.`);
-      setTimeout(() => setToastMessage(null), 4000);
     }
   };
 
@@ -392,27 +415,45 @@ export default function App() {
     }
   };
 
+  // --- Funciones de Agenda ---
   const addAgendaEvent = (e) => {
     e.preventDefault();
-    if (!newEventTitle || !newEventDate) return;
+    if (!newEventTitle) return;
     
     const newEvent = {
       id: Date.now(),
       title: newEventTitle,
-      date: newEventDate,
+      date: selectedCalDate, // Usa el día seleccionado en el calendario
       time: newEventTime
     };
     
     setAgendaEvents([...agendaEvents, newEvent]);
     setNewEventTitle('');
-    setNewEventDate('');
     setNewEventTime('');
-    setToastMessage(`Evento guardado en la agenda.`);
+    setToastMessage(`Evento guardado en la agenda para el ${selectedCalDate}.`);
     setTimeout(() => setToastMessage(null), 3000);
   };
 
   const removeAgendaEvent = (id) => {
     setAgendaEvents(agendaEvents.filter(event => event.id !== id));
+  };
+
+  const changeMonth = (direction) => {
+    if (direction === 'prev') {
+      if (currentCalMonth === 0) {
+        setCurrentCalMonth(11);
+        setCurrentCalYear(y => y - 1);
+      } else {
+        setCurrentCalMonth(m => m - 1);
+      }
+    } else {
+      if (currentCalMonth === 11) {
+        setCurrentCalMonth(0);
+        setCurrentCalYear(y => y + 1);
+      } else {
+        setCurrentCalMonth(m => m + 1);
+      }
+    }
   };
 
   // ==========================================
@@ -788,56 +829,6 @@ export default function App() {
     </div>
   );
 
-  const renderMiniCalendar = () => {
-    const today = new Date();
-    const currentMonth = today.getMonth();
-    const currentYear = today.getFullYear();
-    const daysInMonth = new Date(currentYear, currentMonth + 1, 0).getDate();
-    const firstDayIndex = new Date(currentYear, currentMonth, 1).getDay();
-    
-    const days = [];
-    // Espacios vacíos antes del primer día del mes
-    for (let i = 0; i < firstDayIndex; i++) {
-      days.push(<div key={`empty-${i}`} className="w-8 h-8"></div>);
-    }
-    
-    // Días del mes
-    for (let i = 1; i <= daysInMonth; i++) {
-      // Formatear fecha para comparar con YYYY-MM-DD
-      const dateString = `${currentYear}-${String(currentMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
-      const hasEvent = agendaEvents.some(e => e.date === dateString);
-      
-      days.push(
-        <div 
-          key={i} 
-          onClick={() => setNewEventDate(dateString)}
-          className={`w-8 h-8 flex items-center justify-center rounded-full text-sm relative transition-colors cursor-pointer ${
-            hasEvent ? 'bg-blue-100 text-blue-700 font-bold' : 'text-gray-600 hover:bg-gray-100'
-          } ${newEventDate === dateString ? 'ring-2 ring-blue-500 ring-offset-1' : ''}`}
-        >
-          {i}
-          {hasEvent && <span className="absolute bottom-1 w-1 h-1 bg-blue-600 rounded-full"></span>}
-        </div>
-      );
-    }
-
-    const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
-
-    return (
-      <div className="bg-white border border-gray-200 rounded-2xl p-4 w-full h-full">
-        <h3 className="font-bold text-gray-800 text-center mb-4 capitalize">{monthNames[currentMonth]} {currentYear}</h3>
-        <div className="grid grid-cols-7 gap-1 text-center mb-2">
-          {['Do', 'Lu', 'Ma', 'Mi', 'Ju', 'Vi', 'Sa'].map(d => (
-            <div key={d} className="text-xs font-bold text-gray-400">{d}</div>
-          ))}
-        </div>
-        <div className="grid grid-cols-7 gap-1 place-items-center">
-          {days}
-        </div>
-      </div>
-    );
-  };
-
   const renderChat = () => (
     <div className="bg-white rounded-2xl shadow-sm border border-gray-100 h-full flex flex-col overflow-hidden m-4 md:m-6">
       <div className="bg-white p-4 md:p-6 border-b border-gray-100 flex items-center justify-between shrink-0 gap-2">
@@ -896,78 +887,184 @@ export default function App() {
     </div>
   );
 
-  const renderCalendar = () => (
-    <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 h-full flex flex-col m-4 md:m-6 overflow-hidden">
-      <div className="flex justify-between items-center mb-6 border-b border-gray-100 pb-4 gap-4 shrink-0">
-        <div>
-          <h2 className="text-lg md:text-xl font-bold text-gray-800">Agenda Semanal</h2>
-          <p className="text-xs md:text-sm text-gray-500">Planifica eventos y recordatorios importantes.</p>
+  const renderLargeCalendar = () => {
+    const daysInMonth = new Date(currentCalYear, currentCalMonth + 1, 0).getDate();
+    const firstDayIndex = new Date(currentCalYear, currentCalMonth, 1).getDay();
+    
+    const days = [];
+    // Espacios vacíos antes del primer día del mes
+    for (let i = 0; i < firstDayIndex; i++) {
+      days.push(<div key={`empty-${i}`} className="min-h-[80px] md:min-h-[100px] border border-gray-100 bg-gray-50/30 rounded-lg"></div>);
+    }
+    
+    // Días del mes interactivos
+    for (let i = 1; i <= daysInMonth; i++) {
+      // Formatear fecha para comparar (YYYY-MM-DD)
+      const dateString = `${currentCalYear}-${String(currentCalMonth + 1).padStart(2, '0')}-${String(i).padStart(2, '0')}`;
+      
+      // Buscar eventos para este día
+      const dayEvents = agendaEvents.filter(e => e.date === dateString);
+      const isSelected = selectedCalDate === dateString;
+      const isToday = getTodayString() === dateString;
+      
+      days.push(
+        <div 
+          key={i} 
+          onClick={() => setSelectedCalDate(dateString)}
+          className={`min-h-[80px] md:min-h-[100px] p-2 border rounded-lg flex flex-col transition-all cursor-pointer overflow-hidden ${
+            isSelected ? 'border-blue-500 ring-1 ring-blue-500 bg-blue-50/30' : 'border-gray-200 hover:border-blue-300 hover:bg-gray-50'
+          }`}
+        >
+          <div className="flex justify-between items-start mb-1">
+            <span className={`text-sm font-bold w-7 h-7 flex items-center justify-center rounded-full ${isToday ? 'bg-blue-600 text-white' : 'text-gray-700'}`}>
+              {i}
+            </span>
+            {dayEvents.length > 0 && (
+              <span className="text-[10px] font-bold text-blue-600 bg-blue-100 px-1.5 py-0.5 rounded-md hidden md:inline-block">
+                {dayEvents.length}
+              </span>
+            )}
+          </div>
+          
+          {/* Mostrar pequeños indicadores de eventos */}
+          <div className="flex flex-col gap-1 flex-1 overflow-hidden">
+            {dayEvents.slice(0, 2).map((e, idx) => (
+              <div key={idx} className="text-[10px] md:text-xs truncate bg-indigo-50 text-indigo-700 px-1.5 py-0.5 rounded border border-indigo-100 font-medium">
+                {e.time && `${e.time} `}{e.title}
+              </div>
+            ))}
+            {dayEvents.length > 2 && (
+              <div className="text-[10px] text-gray-500 font-medium px-1">+{dayEvents.length - 2} más</div>
+            )}
+            {dayEvents.length > 0 && dayEvents.length <= 2 && (
+              <div className="flex gap-1 mt-auto md:hidden">
+                <span className="w-1.5 h-1.5 rounded-full bg-blue-500 inline-block"></span>
+              </div>
+            )}
+          </div>
+        </div>
+      );
+    }
+
+    const monthNames = ["Enero", "Febrero", "Marzo", "Abril", "Mayo", "Junio", "Julio", "Agosto", "Septiembre", "Octubre", "Noviembre", "Diciembre"];
+
+    return (
+      <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-4 md:p-6 w-full flex flex-col h-full">
+        {/* Cabecera del Calendario */}
+        <div className="flex justify-between items-center mb-6">
+          <h3 className="text-xl md:text-2xl font-black text-gray-800 capitalize">
+            {monthNames[currentCalMonth]} {currentCalYear}
+          </h3>
+          <div className="flex items-center gap-2">
+            <button onClick={() => changeMonth('prev')} className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronLeft size={20} /></button>
+            <button onClick={() => changeMonth('next')} className="p-2 border border-gray-200 rounded-xl hover:bg-gray-50 transition text-gray-600"><ChevronRight size={20} /></button>
+          </div>
+        </div>
+
+        {/* Nombres de los días */}
+        <div className="grid grid-cols-7 gap-2 text-center mb-2">
+          {['Dom', 'Lun', 'Mar', 'Mié', 'Jue', 'Vie', 'Sáb'].map(d => (
+            <div key={d} className="text-xs md:text-sm font-bold text-gray-400 uppercase tracking-wider">{d}</div>
+          ))}
+        </div>
+
+        {/* Cuadrícula de días */}
+        <div className="grid grid-cols-7 gap-2 flex-1 auto-rows-fr">
+          {days}
         </div>
       </div>
+    );
+  };
 
-      <div className="flex flex-col lg:flex-row gap-6 flex-1 overflow-hidden">
+  const renderCalendar = () => {
+    // Filtrar los eventos que corresponden AL DÍA SELECCIONADO
+    const selectedDayEvents = agendaEvents.filter(e => e.date === selectedCalDate);
+    
+    // Formatear la fecha seleccionada para mostrarla bonita
+    const dateObj = new Date(`${selectedCalDate}T12:00:00`); // Evita problemas de zona horaria
+    const formattedSelectedDate = dateObj.toLocaleDateString('es-ES', { weekday: 'long', day: 'numeric', month: 'long' });
+
+    return (
+      <div className="flex flex-col lg:flex-row gap-4 md:gap-6 h-full p-4 md:p-6 overflow-hidden">
         
-        {/* Columna Izquierda: Formulario */}
-        <div className="w-full lg:w-1/4 shrink-0">
-          <div className="bg-blue-50/50 rounded-2xl p-4 border border-blue-100">
-            <h3 className="font-bold text-blue-900 mb-4">Nuevo Evento</h3>
-            <form onSubmit={addAgendaEvent} className="space-y-3">
+        {/* Columna Izquierda: Calendario Grande */}
+        <div className="w-full lg:w-2/3 flex flex-col shrink-0 overflow-y-auto">
+           {renderLargeCalendar()}
+        </div>
+
+        {/* Columna Derecha: Panel de Detalles del Día */}
+        <div className="w-full lg:w-1/3 flex flex-col gap-4 overflow-y-auto pr-1">
+          
+          {/* Detalles de eventos del día seleccionado */}
+          <div className="bg-white rounded-2xl shadow-sm border border-gray-100 p-5 shrink-0">
+            <h3 className="font-bold text-gray-800 text-lg mb-1 capitalize border-b border-gray-100 pb-3 flex items-center gap-2">
+              <CalendarIcon className="text-blue-600" size={20}/>
+              {formattedSelectedDate}
+            </h3>
+            
+            <div className="mt-4 space-y-3 max-h-60 overflow-y-auto pr-1">
+              {selectedDayEvents.length === 0 ? (
+                <div className="text-center py-6 text-gray-400">
+                  <div className="w-12 h-12 rounded-full bg-gray-50 flex items-center justify-center mx-auto mb-2"><Baby size={20}/></div>
+                  <p className="text-sm">No hay eventos para este día.</p>
+                </div>
+              ) : (
+                selectedDayEvents.sort((a, b) => (a.time || '24:00').localeCompare(b.time || '24:00')).map(event => (
+                  <div key={event.id} className="flex items-start gap-3 p-3 border border-indigo-50 rounded-xl bg-indigo-50/30 group">
+                    <div className="w-10 h-10 rounded-full bg-white text-indigo-600 flex items-center justify-center shrink-0 shadow-sm border border-indigo-100">
+                      {event.time ? <Clock size={16} /> : <CalendarIcon size={16} />}
+                    </div>
+                    <div className="flex-1 min-w-0 pt-0.5">
+                      <h4 className="font-bold text-gray-900 text-sm truncate">{event.title}</h4>
+                      {event.time && <p className="text-xs text-indigo-600 font-bold mt-0.5">{event.time} hrs</p>}
+                    </div>
+                    <button 
+                      onClick={() => removeAgendaEvent(event.id)} 
+                      className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-red-100 hover:text-red-600 transition opacity-0 group-hover:opacity-100"
+                      title="Eliminar evento"
+                    >
+                      <Trash2 size={14} />
+                    </button>
+                  </div>
+                ))
+              )}
+            </div>
+          </div>
+
+          {/* Formulario para agregar evento al día seleccionado */}
+          <div className="bg-blue-50/50 rounded-2xl p-5 border border-blue-100 shrink-0">
+            <h3 className="font-bold text-blue-900 mb-4">Añadir al {selectedCalDate}</h3>
+            <form onSubmit={addAgendaEvent} className="space-y-4">
               <div>
-                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título</label>
-                <input type="text" value={newEventTitle} onChange={e => setNewEventTitle(e.target.value)} placeholder="Ej: Vacuna del bebé" className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Título del evento</label>
+                <input 
+                  type="text" 
+                  value={newEventTitle} 
+                  onChange={e => setNewEventTitle(e.target.value)} 
+                  placeholder="Ej: Vacuna del bebé, Cumpleaños..." 
+                  className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
+                  required 
+                />
               </div>
               <div>
-                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Fecha</label>
-                <input type="date" value={newEventDate} onChange={e => setNewEventDate(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" required />
+                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora (Opcional)</label>
+                <input 
+                  type="time" 
+                  value={newEventTime} 
+                  onChange={e => setNewEventTime(e.target.value)} 
+                  className="w-full px-4 py-2.5 rounded-xl border border-white bg-white shadow-sm text-sm outline-none focus:border-blue-400 focus:ring-2 focus:ring-blue-100 transition" 
+                />
               </div>
-              <div>
-                <label className="text-xs font-bold text-gray-600 uppercase mb-1 block">Hora</label>
-                <input type="time" value={newEventTime} onChange={e => setNewEventTime(e.target.value)} className="w-full px-3 py-2 rounded-xl border border-gray-200 text-sm outline-none focus:border-blue-500" />
-              </div>
-              <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-2.5 rounded-xl transition text-sm flex justify-center items-center gap-2">
+              <button type="submit" className="w-full mt-2 bg-blue-600 hover:bg-blue-700 text-white font-bold py-3 rounded-xl transition text-sm flex justify-center items-center gap-2 shadow-sm">
                 <CalendarIcon size={16} /> Guardar evento
               </button>
             </form>
           </div>
-        </div>
 
-        {/* Columna Central: Mini Calendario Visual */}
-        <div className="w-full lg:w-1/3 shrink-0 hidden sm:block">
-          {renderMiniCalendar()}
-        </div>
-
-        {/* Columna Derecha: Lista de eventos */}
-        <div className="flex-1 overflow-y-auto pr-2 bg-gray-50/50 rounded-2xl p-4 border border-gray-100">
-          <h3 className="font-bold text-gray-800 text-base mb-4 flex items-center gap-2">
-            <CalendarIcon size={18} className="text-blue-600" /> Próximos Eventos
-          </h3>
-          {agendaEvents.length === 0 ? (
-            <p className="text-center text-gray-400 py-10 text-sm">No hay eventos programados en la agenda.</p>
-          ) : (
-            <div className="space-y-3">
-              {agendaEvents.sort((a, b) => new Date(a.date) - new Date(b.date)).map(event => (
-                <div key={event.id} className="flex items-start gap-4 p-4 border border-gray-100 rounded-xl hover:shadow-sm transition bg-white group shadow-sm">
-                  <div className="w-12 h-12 rounded-full bg-blue-50 text-blue-600 flex items-center justify-center shrink-0 border border-blue-100">
-                    <CalendarIcon size={20} />
-                  </div>
-                  <div className="flex-1 min-w-0">
-                    <h4 className="font-bold text-gray-900 truncate">{event.title}</h4>
-                    <div className="flex items-center gap-3 mt-1 text-sm text-gray-500">
-                      <span className="flex items-center gap-1 font-medium"><CalendarIcon size={12} /> {event.date}</span>
-                      {event.time && <span className="flex items-center gap-1"><Clock size={12} /> {event.time}</span>}
-                    </div>
-                  </div>
-                  <button onClick={() => removeAgendaEvent(event.id)} className="w-8 h-8 rounded-full flex items-center justify-center text-gray-400 hover:bg-red-50 hover:text-red-500 transition opacity-0 group-hover:opacity-100">
-                    <X size={16} />
-                  </button>
-                </div>
-              ))}
-            </div>
-          )}
         </div>
       </div>
-    </div>
-  );
+    );
+  };
 
   // --- PANTALLAS DE LOGIN ---
   if (!userRole) {
